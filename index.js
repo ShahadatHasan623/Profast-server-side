@@ -9,6 +9,8 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+const stripe = require('stripe')(process.env.Pyment_GateWay);
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.off1efx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 const client = new MongoClient(uri, {
@@ -24,6 +26,7 @@ async function run() {
     await client.connect();
 
     const parcelCollection = client.db("parcelDB").collection("parcel");
+    const paymentCollection=client.db("parcelDB").collection("payments")
 
     app.post("/parcels", async (req, res) => {
       const newParcel = req.body;
@@ -58,9 +61,10 @@ async function run() {
     });
 
     app.post("/create-payment-intent", async (req, res) => {
+      const amountInCents =req.body.amountInCents
       try {
         const paymentIntent = await stripe.paymentIntents.create({
-          amount: 1000, // amount in cents
+          amount: amountInCents,
           currency: "usd",
           automatic_payment_methods: { enabled: true },
         });
@@ -69,6 +73,36 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
+
+    
+    // post :record payment and update parcel status
+    app.post('/payments',async(req,res)=>{
+      const{parcelId,email,amount,paymentMethod,transactionId}=req.body;
+      const updateResult=await parcelCollection.updateOne(
+        {_id: new ObjectId(parcelId)},
+        {$set:{payment_status:'paid'}}
+      )
+
+      const paymentDoc={
+        parcelId,
+        email,
+        amount,
+        paymentMethod,
+        transactionId,
+        paid_at_string:new Date().toISOString(),
+        paid_at:new Date(),
+
+      }
+      const result =await paymentCollection.insertOne(paymentDoc)
+    })
+
+    app.get('/payments',async(req,res)=>{
+      const userEmail=req.query.email;
+      const query =userEmail?{email:userEmail}:{};
+      const options={sort:{paid_at:-1}}
+      const payment =await paymentCollection.find(query,options).toArray();
+      res.send(payment)
+    })
 
     await client.db("admin").command({ ping: 1 });
     console.log(
